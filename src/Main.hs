@@ -69,6 +69,11 @@ choosePodcast podcastShows = do
   let podcastShow = find (\s -> feedTitle s == feedChoice && showTitle s == showChoice) podcastShows
   return podcastShow
 
+playPodcast :: Text -> IO ()
+playPodcast podcastFile = do
+  procs "git-annex" ["get", podcastFile] mempty
+  procs "vlc" [podcastFile] mempty
+
 main :: IO ()
 main = do
   podcastShows <- runGitAnnex
@@ -76,5 +81,4 @@ main = do
   podcastChosen <- fmap join $ runByline $ choosePodcast podcastShows
   let podcastFile = fmap showFile podcastChosen
   let noShowChosen = putStrLn "No Show Chosen."
-  let playPodcast f = procs "vlc" [f] mempty
   maybe noShowChosen playPodcast podcastFile
