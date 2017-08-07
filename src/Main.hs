@@ -77,7 +77,6 @@ playPodcast podcastFile = do
 main :: IO ()
 main = do
   podcastShows <- runGitAnnex
-  print $ uniqueFeedTitles podcastShows
   podcastChosen <- fmap join $ runByline $ choosePodcast podcastShows
   let podcastFile = fmap showFile podcastChosen
   let noShowChosen = putStrLn "No Show Chosen."
