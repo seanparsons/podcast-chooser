@@ -40,8 +40,6 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
-- byline-0.2.4.0
-- terminfo-hs-0.2.1
 
 # Override default flag values for local packages and extra-deps
 flags: {}
@@ -67,4 +65,4 @@ extra-package-dbs: []
 # Allow a newer minor version of GHC than the snapshot specifies
 # compiler-check: newer-minor
 nix:
-  packages: [gcc ncurses]
+  packages: []
