@@ -82,7 +82,7 @@ getChoice header choices = do
   let inputLines = choices >>= (maybeToList . textToLine)
   let input = select inputLines
   (exitCode, result) <- procStrict "fzf" ["--header=" `mappend` header, "--tiebreak=index", "--tac"] input
-  return $ Just $ T.filter (/= '\n') result
+  return $ Just $ T.init result
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
 choosePodcast podcastShows = do
@@ -95,7 +95,8 @@ choosePodcast podcastShows = do
   return podcastShow
 
 playPodcast :: Text -> IO ()
-playPodcast podcastFile = do
+playPodcast podcastFile = sh $ do
+  cd "/home/sean/Podcasts"
   procs "git-annex" ["get", podcastFile] mempty
   procs "vlc" [podcastFile] mempty
 
@@ -104,7 +105,6 @@ getSymlinks = do
   let podcastsDir = [absdir|/home/sean/Podcasts|]
   (podcastDirs, _) <- listDir podcastsDir
   podcastFiles <- foldMap (fmap snd . listDir) podcastDirs
-  print podcastFiles
   podcastSymlinks <- filterM isSymlink podcastFiles
   pathPairs <- traverse (\p -> fmap (\r -> (p, r)) $ canonicalizePath p) podcastSymlinks
   return $ fmap (\(p, r) -> (pack $ toFilePath p, pack $ toFilePath r)) pathPairs
@@ -133,24 +133,29 @@ findToRemoveToAdd symlinkPairs podcastEntries =
       toAdd = filter (\(_, r) -> notElem r entryPaths) symlinkPairs
   in  (toRemove, toAdd)
 
+removeMissing :: Connection -> [PodcastShowDBEntry] -> IO ()
+removeMissing connection toRemove = do
+  traverse_ (\(PodcastShowDBEntry (r, _)) -> execute connection "DELETE FROM shows WHERE filepath = ?" (Only r)) toRemove
+
+addNew :: Connection -> [(Text, Text)] -> IO ()
+addNew connection toAdd = do
+  -- Retrieve metadata.
+  newMetadata <- traverse (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex p) toAdd
+  -- Add new metadata.
+  traverse_ (\e -> execute connection "INSERT INTO shows VALUES (?, ?, ?, ?, ?, ?)" e) newMetadata
+
 main :: IO ()
 main = do
   connection <- getConnection
   -- Get list of symlinks and real paths in Podcasts directory.
   symlinkPairs <- getSymlinks
-  --print symlinkPairs
   -- Get files in cache database.
   databaseShows <- getDatabaseShows connection
   let (toRemove, toAdd) = findToRemoveToAdd symlinkPairs databaseShows
-  --print toRemove
-  --print toAdd
   -- Remove entries not present in database.
-  traverse (\(PodcastShowDBEntry (r, _)) -> execute connection "DELETE FROM shows WHERE filepath = ?" (Only r)) toRemove
-  -- For new entries:
-    -- Retrieve metadata.
-  newMetadata <- traverse (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex p) toAdd
-    -- Add new metadata.
-  traverse_ (\e -> execute connection "INSERT INTO shows VALUES (?, ?, ?, ?, ?, ?)" e) newMetadata
+  removeMissing connection toRemove
+  -- For new entries.
+  addNew connection toAdd
   -- Show menu.
   podcastShows <- (fmap . fmap) (\(PodcastShowDBEntry (_, e)) -> e) $ getDatabaseShows connection
   podcastChosen <- choosePodcast podcastShows
