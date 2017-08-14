@@ -4,8 +4,10 @@ let
 
   inherit (nixpkgs) pkgs;
 
+  path-io = (haskellPackages.callPackage ./path-io.nix {});
+
   f = { mkDerivation, aeson, base, bytestring, extra, foldl, lens
-      , lens-aeson, path, path-io, sqlite-simple, stdenv, text, time
+      , lens-aeson, path, sqlite-simple, stdenv, text, time
       , turtle
       }:
       mkDerivation {
