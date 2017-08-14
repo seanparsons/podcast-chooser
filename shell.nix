@@ -4,8 +4,9 @@ let
 
   inherit (nixpkgs) pkgs;
 
-  f = { mkDerivation, aeson, base, byline, bytestring, foldl, lens
-      , lens-aeson, stdenv, text, time, turtle
+  f = { mkDerivation, aeson, base, bytestring, extra, foldl, lens
+      , lens-aeson, path, path-io, sqlite-simple, stdenv, text, time
+      , turtle
       }:
       mkDerivation {
         pname = "podcast-chooser";
@@ -14,7 +15,8 @@ let
         isLibrary = false;
         isExecutable = true;
         executableHaskellDepends = [
-          aeson base byline bytestring foldl lens lens-aeson text time turtle
+          aeson base bytestring extra foldl lens lens-aeson path path-io
+          sqlite-simple text time turtle
         ];
         homepage = "https://github.com/githubuser/podcast-chooser#readme";
         license = stdenv.lib.licenses.bsd3;
