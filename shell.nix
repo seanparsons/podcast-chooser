@@ -8,7 +8,7 @@ let
 
   f = { mkDerivation, aeson, base, bytestring, extra, foldl, lens
       , lens-aeson, path, sqlite-simple, stdenv, text, time
-      , turtle
+      , turtle, monad-loops
       }:
       mkDerivation {
         pname = "podcast-chooser";
@@ -18,7 +18,7 @@ let
         isExecutable = true;
         executableHaskellDepends = [
           aeson base bytestring extra foldl lens lens-aeson path path-io
-          sqlite-simple text time turtle
+          sqlite-simple text time turtle monad-loops
         ];
         homepage = "https://github.com/githubuser/podcast-chooser#readme";
         license = stdenv.lib.licenses.bsd3;

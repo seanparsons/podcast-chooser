@@ -23,6 +23,10 @@ import Database.SQLite.Simple
 import Path
 import Path.IO
 import Control.Monad.Extra
+import Control.Exception
+import Control.Monad.Loops
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Maybe
 
 data PodcastShow = PodcastShow
                  { year         :: Maybe Int
@@ -77,28 +81,32 @@ runGitAnnex path = do
 uniqueFeedTitles :: [PodcastShow] -> [Text]
 uniqueFeedTitles = nub . toListOf (traverse . feedTitleLens . _Just)
 
-getChoice :: Text -> [Text] -> IO (Maybe Text)
-getChoice header choices = do
+getChoice :: Text -> [Text] -> MaybeT IO Text
+getChoice header choices = MaybeT $ do
   let inputLines = choices >>= (maybeToList . textToLine)
   let input = select inputLines
   (exitCode, result) <- procStrict "fzf" ["--header=" `mappend` header, "--tiebreak=index", "--tac"] input
-  return $ Just $ T.init result
+  return $ case exitCode of
+    ExitSuccess   -> Just $ T.init result
+    ExitFailure _ -> Nothing
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
-choosePodcast podcastShows = do
+choosePodcast podcastShows = runMaybeT $ do
   let feedTitles = uniqueFeedTitles podcastShows
   feedChoice <- getChoice "Choose Podcast" feedTitles
-  let feedShows = sortOn (\p -> (year p, month p, showTitle p)) $ filter (\s -> feedTitle s == feedChoice) podcastShows
+  let feedShows = sortOn (\p -> (year p, month p, showTitle p)) $ filter (\s -> feedTitle s == Just feedChoice) podcastShows
   let showTitles = feedShows >>= (maybeToList . showTitle)
   showChoice <- getChoice "Choose Show" showTitles
-  let podcastShow = find (\s -> feedTitle s == feedChoice && showTitle s == showChoice) podcastShows
+  podcastShow <- MaybeT $ return $ find (\s -> feedTitle s == Just feedChoice && showTitle s == Just showChoice) podcastShows
   return podcastShow
 
-playPodcast :: Text -> IO ()
-playPodcast podcastFile = sh $ do
-  cd "/home/sean/Podcasts"
-  procs "git-annex" ["get", podcastFile] mempty
-  procs "vlc" [podcastFile] mempty
+playPodcast :: Text -> IO Bool
+playPodcast podcastFile = do
+  sh $ do
+    cd "/home/sean/Podcasts"
+    procs "git-annex" ["get", podcastFile] mempty
+    procs "vlc" [podcastFile] mempty
+  return True
 
 getSymlinks :: IO [(Text, Text)]
 getSymlinks = do
@@ -144,9 +152,8 @@ addNew connection toAdd = do
   -- Add new metadata.
   traverse_ (\e -> execute connection "INSERT INTO shows VALUES (?, ?, ?, ?, ?, ?)" e) newMetadata
 
-main :: IO ()
-main = do
-  connection <- getConnection
+chooseAndPlay :: Connection -> IO Bool
+chooseAndPlay connection = do
   -- Get list of symlinks and real paths in Podcasts directory.
   symlinkPairs <- getSymlinks
   -- Get files in cache database.
@@ -160,8 +167,14 @@ main = do
   podcastShows <- (fmap . fmap) (\(PodcastShowDBEntry (_, e)) -> e) $ getDatabaseShows connection
   podcastChosen <- choosePodcast podcastShows
   let podcastFile = fmap showFile podcastChosen
-  let noShowChosen = putStrLn "No Show Chosen."
+  let noShowChosen = do
+                        putStrLn "No Show Chosen."
+                        return False
   maybe noShowChosen playPodcast podcastFile
-  -- Close connection.
-  close connection
+
+
+main :: IO ()
+main =
+  let toLoop = bracket getConnection close chooseAndPlay
+  in  void $ iterateWhile id toLoop
 

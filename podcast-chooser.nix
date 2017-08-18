@@ -1,6 +1,6 @@
 { mkDerivation, aeson, base, bytestring, extra, foldl, lens
 , lens-aeson, path, sqlite-simple, stdenv, text, time
-, turtle, nixpkgs ? import <nixpkgs> {}
+, turtle, monad-loops, nixpkgs ? import <nixpkgs> {}
 }:
 let
   inherit (nixpkgs) pkgs;
