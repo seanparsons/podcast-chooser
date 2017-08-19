@@ -15,7 +15,7 @@ in
     isExecutable = true;
     executableHaskellDepends = [
       aeson base bytestring extra foldl lens lens-aeson path path-io
-      sqlite-simple text time turtle
+      sqlite-simple text time turtle monad-loops
     ];
     homepage = "https://github.com/githubuser/podcast-chooser#readme";
     license = stdenv.lib.licenses.bsd3;
