@@ -105,7 +105,7 @@ playPodcast podcastFile = do
   sh $ do
     cd "/home/sean/Podcasts"
     procs "git-annex" ["get", podcastFile] mempty
-    procs "vlc" [podcastFile] mempty
+    procs "vlc-minimal" [podcastFile] mempty
   return True
 
 getSymlinks :: IO [(Text, Text)]
