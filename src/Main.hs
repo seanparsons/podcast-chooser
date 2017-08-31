@@ -5,14 +5,14 @@
 import Control.Monad
 import Data.Aeson
 import Data.ByteString.Lazy (fromStrict)
+import Data.Char
 import Data.Foldable
 import Data.Maybe
+import Data.Monoid
 import Data.Text hiding (lines, find, filter)
 import qualified Data.Text as T
 import Data.Text.Encoding
 import Data.Text.Lens hiding (text)
-import Turtle hiding (text, find, UTCTime, decimal, (</>))
-import qualified Control.Foldl as F
 import Data.Aeson.Lens
 import Control.Lens hiding (Choice)
 import Numeric.Lens
@@ -25,8 +25,15 @@ import Path.IO
 import Control.Monad.Extra
 import Control.Exception
 import Control.Monad.Loops
+import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
+import Options.Applicative
+import Control.Concurrent.Async
+import Control.Concurrent.QSem
+import GHC.IO.Handle
+import System.Process
+import System.Exit
 
 data PodcastShow = PodcastShow
                  { year         :: Maybe Int
@@ -54,46 +61,64 @@ instance ToRow PodcastShowDBEntry where
 feedTitleLens :: Lens' PodcastShow (Maybe Text)
 feedTitleLens = lens feedTitle (\s -> \a -> s {feedTitle = a})
 
-parsePodcastShow :: Text -> Either String PodcastShow
-parsePodcastShow value = maybe (Left ("Can't parse podcast: " ++ (unpack value))) return $ do
+filterNewlines :: Text -> Text
+filterNewlines = T.dropWhileEnd (\c -> c == '\n' || c == '\r')
+
+parsePodcastShow :: Value -> Either String PodcastShow
+parsePodcastShow value = maybe (Left ("Can't parse podcast: " ++ (show value))) return $ do
   pFile <- value ^? key "file" . _String
   let yearField = value ^? key "fields" . key "year" . nth 0 . _String . unpacked . decimal
   let monthField = value ^? key "fields" . key "month" . nth 0 . _String . unpacked . decimal
   let sTitle = value ^? key "fields" . key "title" . nth 0 . _String
   let fTitle = value ^? key "fields" . key "feedtitle" . nth 0 . _String
-  return $ PodcastShow yearField monthField fTitle sTitle pFile
+  return $ PodcastShow yearField monthField (fmap filterNewlines fTitle) (fmap filterNewlines sTitle) pFile
 
-parseValue :: Line -> IO PodcastShow
-parseValue line = either fail return $ parsePodcastShow $ lineToText line
+parseValue :: Text -> IO PodcastShow
+parseValue text = either fail return $ do
+  value <- eitherDecodeStrict $ encodeUtf8 text
+  parsePodcastShow value
 
-getAnnexMetadata :: Text -> Shell Line
+getAnnexMetadata :: Text -> IO Text
 getAnnexMetadata path = do
-  cd "/home/sean/Podcasts"
-  inproc "git-annex" ["metadata", "--json", path] mempty
+  processOutput <- readCreateProcess ((proc "git-annex" ["metadata", "--json", unpack path]) { cwd = Just "/home/sean/Podcasts" }) ""
+  return $ pack processOutput
 
-runGitAnnex :: Text -> IO PodcastShow
-runGitAnnex path = do
-  possibleShow <- (flip foldIO) (F.generalize F.head) $ do
-    metadataLine <- getAnnexMetadata path
-    liftIO $ parseValue metadataLine
-  maybe (fail ("No show: " ++ unpack path)) return possibleShow
+runGitAnnex :: QSem -> Text -> IO PodcastShow
+runGitAnnex semaphore path = bracket_ (waitQSem semaphore) (signalQSem semaphore) $ do
+  metadataLine <- getAnnexMetadata path
+  result <- parseValue metadataLine
+  return result
 
 uniqueFeedTitles :: [PodcastShow] -> [Text]
 uniqueFeedTitles = nub . toListOf (traverse . feedTitleLens . _Just)
 
 getChoice :: Text -> [Text] -> MaybeT IO Text
 getChoice header choices = MaybeT $ do
-  let inputLines = choices >>= (maybeToList . textToLine)
-  let input = select inputLines
-  (exitCode, result) <- procStrict "fzf" ["--header=" `mappend` header, "--tiebreak=index", "--tac"] input
-  return $ case exitCode of
-    ExitSuccess   -> Just $ T.init result
-    ExitFailure _ -> Nothing
+  let input = join $ fmap (\t -> unpack t <> "\n") choices
+  let createProcess = (proc "fzf" [unpack ("--header=" <> header), "--tiebreak=index", "--tac"]) {
+                        cwd = Just "/home/sean/Podcasts",
+                        std_in = CreatePipe,
+                        std_out = CreatePipe
+                      }
+  withCreateProcess createProcess $ \possibleStdin possibleStdout _ processHandle -> do
+    stdInHandle <- maybe (fail "No stdin handle.") return possibleStdin
+    stdOutHandle <- maybe (fail "No stdout handle.") return possibleStdout
+    -- Write to stdin.
+    hPutStr stdInHandle input
+    hFlush stdInHandle
+    -- Wait for app to finish.
+    exitCode <- waitForProcess processHandle
+    -- Get output.
+    case exitCode of
+      ExitSuccess   -> do
+                          line <- hGetLine stdOutHandle
+                          return $ Just $ pack line
+      ExitFailure _ -> return Nothing
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
 choosePodcast podcastShows = runMaybeT $ do
   let feedTitles = uniqueFeedTitles podcastShows
-  feedChoice <- getChoice "Choose Podcast" feedTitles
+  feedChoice <- getChoice "Choose Podcast" $ sort feedTitles
   let feedShows = sortOn (\p -> (year p, month p, showTitle p)) $ filter (\s -> feedTitle s == Just feedChoice) podcastShows
   let showTitles = feedShows >>= (maybeToList . showTitle)
   showChoice <- getChoice "Choose Show" showTitles
@@ -102,10 +127,8 @@ choosePodcast podcastShows = runMaybeT $ do
 
 playPodcast :: Text -> IO Bool
 playPodcast podcastFile = do
-  sh $ do
-    cd "/home/sean/Podcasts"
-    procs "git-annex" ["get", podcastFile] mempty
-    procs "vlc-minimal" [podcastFile] mempty
+  _ <- readCreateProcess ((proc "git-annex" ["get", unpack podcastFile]) { cwd = Just "/home/sean/Podcasts" }) ""
+  _ <- readCreateProcess ((proc "vlc-minimal" [unpack podcastFile]) { cwd = Just "/home/sean/Podcasts" }) ""
   return True
 
 getSymlinks :: IO [(Text, Text)]
@@ -145,15 +168,22 @@ removeMissing :: Connection -> [PodcastShowDBEntry] -> IO ()
 removeMissing connection toRemove = do
   traverse_ (\(PodcastShowDBEntry (r, _)) -> execute connection "DELETE FROM shows WHERE filepath = ?" (Only r)) toRemove
 
+removeAll :: Connection -> IO ()
+removeAll connection = execute_ connection "DELETE FROM shows"
+
 addNew :: Connection -> [(Text, Text)] -> IO ()
 addNew connection toAdd = do
   -- Retrieve metadata.
-  newMetadata <- traverse (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex p) toAdd
+  semaphore <- newQSem 20
+  newMetadata <- mapConcurrently (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex semaphore p) toAdd
+  --newMetadata <- traverse (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex p) toAdd
   -- Add new metadata.
   traverse_ (\e -> execute connection "INSERT INTO shows VALUES (?, ?, ?, ?, ?, ?)" e) newMetadata
 
-chooseAndPlay :: Connection -> IO Bool
-chooseAndPlay connection = do
+chooseAndPlay :: Bool -> Connection -> IO Bool
+chooseAndPlay clean connection = do
+  -- Maybe clean the database away.
+  when clean $ removeAll connection
   -- Get list of symlinks and real paths in Podcasts directory.
   symlinkPairs <- getSymlinks
   -- Get files in cache database.
@@ -167,14 +197,14 @@ chooseAndPlay connection = do
   podcastShows <- (fmap . fmap) (\(PodcastShowDBEntry (_, e)) -> e) $ getDatabaseShows connection
   podcastChosen <- choosePodcast podcastShows
   let podcastFile = fmap showFile podcastChosen
-  let noShowChosen = do
-                        putStrLn "No Show Chosen."
-                        return False
+  let noShowChosen = putStrLn "No Show Chosen." >> return False
   maybe noShowChosen playPodcast podcastFile
 
-
 main :: IO ()
-main =
-  let toLoop = bracket getConnection close chooseAndPlay
-  in  void $ iterateWhile id toLoop
+main = do
+  let parser = switch (long "clean" <> help "Clear out the database.")
+  let opts = info parser mempty
+  execParser opts >>= \clean -> do
+    let toLoop = bracket getConnection close $ chooseAndPlay clean
+    void $ iterateWhile id toLoop
 

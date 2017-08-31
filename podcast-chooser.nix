@@ -1,10 +1,10 @@
-{ mkDerivation, aeson, base, bytestring, extra, foldl, lens
-, lens-aeson, path, sqlite-simple, stdenv, text, time
-, turtle, monad-loops, nixpkgs ? import <nixpkgs> {}
+{ mkDerivation, aeson, async, base, bytestring, extra, foldl, lens
+, lens-aeson, monad-loops, optparse-applicative, path, path-io
+, process, sqlite-simple, stdenv, text, time, transformers
+, nixpkgs ? import <nixpkgs> {}
 }:
 let
   inherit (nixpkgs) pkgs;
-
   path-io = (pkgs.haskellPackages.callPackage ./path-io.nix {});
 in
   mkDerivation {
@@ -14,8 +14,9 @@ in
     isLibrary = false;
     isExecutable = true;
     executableHaskellDepends = [
-      aeson base bytestring extra foldl lens lens-aeson path path-io
-      sqlite-simple text time turtle monad-loops
+      aeson async base bytestring extra foldl lens lens-aeson monad-loops
+      optparse-applicative path path-io process sqlite-simple text time
+      transformers
     ];
     homepage = "https://github.com/githubuser/podcast-chooser#readme";
     license = stdenv.lib.licenses.bsd3;
