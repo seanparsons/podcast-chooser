@@ -92,28 +92,56 @@ runGitAnnex semaphore path = bracket_ (waitQSem semaphore) (signalQSem semaphore
 uniqueFeedTitles :: [PodcastShow] -> [Text]
 uniqueFeedTitles = nub . toListOf (traverse . feedTitleLens . _Just)
 
-getChoice :: Text -> [Text] -> MaybeT IO Text
-getChoice header choices = MaybeT $ do
-  let input = join $ fmap (\t -> unpack t <> "\n") choices
-  let createProcess = (proc "fzf" [unpack ("--header=" <> header), "--tiebreak=index", "--tac"]) {
-                        cwd = Just "/home/sean/Podcasts",
-                        std_in = CreatePipe,
-                        std_out = CreatePipe
-                      }
+podcastsFolderWorkingDirectory :: CreateProcess -> CreateProcess
+podcastsFolderWorkingDirectory cp = cp { cwd = Just "/home/sean/Podcasts" }
+
+runThisProcess :: (CreateProcess -> CreateProcess) -> (Maybe Handle -> ExitCode -> IO a) -> String -> [String] -> String -> IO a
+runThisProcess processTransform readOutput app params input = do
+  let createProcess = processTransform $ proc app params
   withCreateProcess createProcess $ \possibleStdin possibleStdout _ processHandle -> do
-    stdInHandle <- maybe (fail "No stdin handle.") return possibleStdin
-    stdOutHandle <- maybe (fail "No stdout handle.") return possibleStdout
-    -- Write to stdin.
-    hPutStr stdInHandle input
-    hFlush stdInHandle
+    let debugDetails = Data.List.intercalate " " (app : params)
+    forM_ possibleStdin $ \stdInHandle -> do
+      -- Write to stdin.
+      hPutStr stdInHandle input
+      hFlush stdInHandle
     -- Wait for app to finish.
     exitCode <- waitForProcess processHandle
     -- Get output.
-    case exitCode of
-      ExitSuccess   -> do
-                          line <- hGetLine stdOutHandle
-                          return $ Just $ pack line
-      ExitFailure _ -> return Nothing
+    readOutput possibleStdout exitCode
+
+readTextOutput :: Maybe Handle -> ExitCode -> IO (Maybe Text)
+readTextOutput _ (ExitFailure _)          = return Nothing
+readTextOutput Nothing ExitSuccess        = fail "No stdout handle, can't read text output."
+readTextOutput (Just handle) ExitSuccess  = do
+  line <- hGetLine handle
+  return $ Just $ pack line
+
+ignoreTextOutput :: Maybe Handle -> ExitCode -> IO ()
+ignoreTextOutput _ _ = return ()
+
+runProcessInPodcastsFolder :: (Maybe Handle -> ExitCode -> IO a) -> String -> [String] -> String -> IO a
+runProcessInPodcastsFolder = runThisProcess podcastsFolderWorkingDirectory
+
+runProcessCreatingPipes :: (Maybe Handle -> ExitCode -> IO a) -> String -> [String] -> String -> IO a
+runProcessCreatingPipes =
+  let processTransform process = (podcastsFolderWorkingDirectory process) {
+                                   std_in = CreatePipe,
+                                   std_out = CreatePipe
+                                 }
+  in  runThisProcess processTransform
+
+runProcessNoPipes :: (Maybe Handle -> ExitCode -> IO a) -> String -> [String] -> String -> IO a
+runProcessNoPipes =
+  let processTransform process = (podcastsFolderWorkingDirectory process) {
+                                   std_in = Inherit,
+                                   std_out = Inherit
+                                 }
+  in  runThisProcess processTransform
+
+getChoice :: Text -> [Text] -> MaybeT IO Text
+getChoice header choices = MaybeT $ do
+  let input = join $ fmap (\t -> unpack t <> "\n") choices
+  runProcessCreatingPipes readTextOutput "fzf" [unpack ("--header=" <> header), "--tiebreak=index", "--tac"] input
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
 choosePodcast podcastShows = runMaybeT $ do
@@ -127,8 +155,8 @@ choosePodcast podcastShows = runMaybeT $ do
 
 playPodcast :: Text -> IO Bool
 playPodcast podcastFile = do
-  _ <- readCreateProcess ((proc "git-annex" ["get", unpack podcastFile]) { cwd = Just "/home/sean/Podcasts" }) ""
-  _ <- readCreateProcess ((proc "vlc-minimal" [unpack podcastFile]) { cwd = Just "/home/sean/Podcasts" }) ""
+  runProcessCreatingPipes ignoreTextOutput "git-annex" ["get", unpack podcastFile] ""
+  runProcessNoPipes ignoreTextOutput "vlc" ["-I", "ncurses", "--no-loop", "--no-repeat", "--play-and-exit", unpack podcastFile] ""
   return True
 
 getSymlinks :: IO [(Text, Text)]
