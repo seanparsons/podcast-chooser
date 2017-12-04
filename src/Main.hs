@@ -38,6 +38,7 @@ import System.Exit
 data PodcastShow = PodcastShow
                  { year         :: Maybe Int
                  , month        :: Maybe Int
+                 , day          :: Maybe Int
                  , feedTitle    :: Maybe Text
                  , showTitle    :: Maybe Text
                  , showFile     :: Text
@@ -50,13 +51,14 @@ instance FromRow PodcastShowDBEntry where
     filePath_ <- field
     year_ <- field
     month_ <- field
+    day_ <- field
     feedTitle_ <- field
     showTitle_ <- field
     showFile_ <- field
-    return $ PodcastShowDBEntry (filePath_, (PodcastShow year_ month_ feedTitle_ showTitle_ showFile_))
+    return $ PodcastShowDBEntry (filePath_, (PodcastShow year_ month_ day_ feedTitle_ showTitle_ showFile_))
 
 instance ToRow PodcastShowDBEntry where
-  toRow (PodcastShowDBEntry (filePath_, (PodcastShow year_ month_ feedTitle_ showTitle_ showFile_))) = toRow (filePath_, year_, month_, feedTitle_, showTitle_, showFile_)
+  toRow (PodcastShowDBEntry (filePath_, (PodcastShow year_ month_ day_ feedTitle_ showTitle_ showFile_))) = toRow (filePath_, year_, month_, day_ , feedTitle_, showTitle_, showFile_)
 
 feedTitleLens :: Lens' PodcastShow (Maybe Text)
 feedTitleLens = lens feedTitle (\s -> \a -> s {feedTitle = a})
@@ -69,9 +71,10 @@ parsePodcastShow value = maybe (Left ("Can't parse podcast: " ++ (show value))) 
   pFile <- value ^? key "file" . _String
   let yearField = value ^? key "fields" . key "year" . nth 0 . _String . unpacked . decimal
   let monthField = value ^? key "fields" . key "month" . nth 0 . _String . unpacked . decimal
+  let dayField = value ^? key "fields" . key "day" . nth 0 . _String . unpacked . decimal
   let sTitle = value ^? key "fields" . key "title" . nth 0 . _String
   let fTitle = value ^? key "fields" . key "feedtitle" . nth 0 . _String
-  return $ PodcastShow yearField monthField (fmap filterNewlines fTitle) (fmap filterNewlines sTitle) pFile
+  return $ PodcastShow yearField monthField dayField (fmap filterNewlines fTitle) (fmap filterNewlines sTitle) pFile
 
 parseValue :: Text -> IO PodcastShow
 parseValue text = either fail return $ do
@@ -178,7 +181,7 @@ getConnection = do
   -- Open database connection.
   connection <- open (toFilePath cacheDBFile)
   -- Create SHOWS table.
-  execute_ connection "CREATE TABLE IF NOT EXISTS shows (filepath TEXT PRIMARY KEY NOT NULL, year INT NULL, month INT NULL, feedtitle TEXT NULL, showtitle TEXT NULL, showfile TEXT)"
+  execute_ connection "CREATE TABLE IF NOT EXISTS shows (filepath TEXT PRIMARY KEY NOT NULL, year INT NULL, month INT NULL, day INT NULL, feedtitle TEXT NULL, showtitle TEXT NULL, showfile TEXT)"
   return connection
 
 getDatabaseShows :: Connection -> IO [PodcastShowDBEntry]
@@ -206,7 +209,7 @@ addNew connection toAdd = do
   newMetadata <- mapConcurrently (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex semaphore p) toAdd
   --newMetadata <- traverse (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex p) toAdd
   -- Add new metadata.
-  traverse_ (\e -> execute connection "INSERT INTO shows VALUES (?, ?, ?, ?, ?, ?)" e) newMetadata
+  traverse_ (\e -> execute connection "INSERT INTO shows VALUES (?, ?, ?, ?, ?, ?, ?)" e) newMetadata
 
 chooseAndPlay :: Bool -> Connection -> IO Bool
 chooseAndPlay clean connection = do
