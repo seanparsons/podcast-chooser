@@ -150,7 +150,7 @@ choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
 choosePodcast podcastShows = runMaybeT $ do
   let feedTitles = uniqueFeedTitles podcastShows
   feedChoice <- getChoice "Choose Podcast" $ sort feedTitles
-  let feedShows = sortOn (\p -> (year p, month p, showTitle p)) $ filter (\s -> feedTitle s == Just feedChoice) podcastShows
+  let feedShows = sortOn (\p -> (year p, month p, day p, showTitle p)) $ filter (\s -> feedTitle s == Just feedChoice) podcastShows
   let showTitles = feedShows >>= (maybeToList . showTitle)
   showChoice <- getChoice "Choose Show" showTitles
   podcastShow <- MaybeT $ return $ find (\s -> feedTitle s == Just feedChoice && showTitle s == Just showChoice) podcastShows
