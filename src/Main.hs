@@ -1,10 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 import Control.Monad
 import Data.Aeson
 import Data.ByteString.Lazy (fromStrict)
+import qualified Data.ByteString.Lazy as BL
 import Data.Char
 import Data.Foldable
 import Data.Maybe
@@ -19,7 +21,6 @@ import Numeric.Lens
 import Data.List
 import Data.Time.Clock
 import Data.Time.Format
-import Database.SQLite.Simple
 import Path
 import Path.IO
 import Control.Monad.Extra
@@ -31,9 +32,19 @@ import Control.Monad.Trans.Maybe
 import Options.Applicative
 import Control.Concurrent.Async
 import Control.Concurrent.QSem
+import GHC.Generics
 import GHC.IO.Handle
 import System.Process
 import System.Exit
+
+cacheFolder :: Path Abs Dir
+cacheFolder = [absdir|/home/sean/.cache/podcast-chooser|]
+
+cacheDBFile :: Path Abs File
+cacheDBFile = cacheFolder </> [relfile|cache.db|]
+
+podcastsDir :: Path Abs Dir
+podcastsDir = [absdir|/home/sean/Podcasts|]
 
 data PodcastShow = PodcastShow
                  { year         :: Maybe Int
@@ -42,23 +53,13 @@ data PodcastShow = PodcastShow
                  , feedTitle    :: Maybe Text
                  , showTitle    :: Maybe Text
                  , showFile     :: Text
-                 } deriving (Eq, Ord, Show)
+                 , symlinkPath  :: Text
+                 } deriving (Eq, Ord, Show, Generic)
 
-newtype PodcastShowDBEntry = PodcastShowDBEntry (Text, PodcastShow) deriving (Eq, Ord, Show)
+instance ToJSON PodcastShow where
+  toEncoding = genericToEncoding defaultOptions
 
-instance FromRow PodcastShowDBEntry where
-  fromRow = do
-    filePath_ <- field
-    year_ <- field
-    month_ <- field
-    day_ <- field
-    feedTitle_ <- field
-    showTitle_ <- field
-    showFile_ <- field
-    return $ PodcastShowDBEntry (filePath_, (PodcastShow year_ month_ day_ feedTitle_ showTitle_ showFile_))
-
-instance ToRow PodcastShowDBEntry where
-  toRow (PodcastShowDBEntry (filePath_, (PodcastShow year_ month_ day_ feedTitle_ showTitle_ showFile_))) = toRow (filePath_, year_, month_, day_ , feedTitle_, showTitle_, showFile_)
+instance FromJSON PodcastShow
 
 feedTitleLens :: Lens' PodcastShow (Maybe Text)
 feedTitleLens = lens feedTitle (\s -> \a -> s {feedTitle = a})
@@ -66,37 +67,37 @@ feedTitleLens = lens feedTitle (\s -> \a -> s {feedTitle = a})
 filterNewlines :: Text -> Text
 filterNewlines = T.dropWhileEnd (\c -> c == '\n' || c == '\r')
 
-parsePodcastShow :: Value -> Either String PodcastShow
-parsePodcastShow value = maybe (Left ("Can't parse podcast: " ++ (show value))) return $ do
+parsePodcastShow :: Value -> Text -> Either String PodcastShow
+parsePodcastShow value symlinkPathField = maybe (Left ("Can't parse podcast: " ++ (show value))) return $ do
   pFile <- value ^? key "file" . _String
   let yearField = value ^? key "fields" . key "year" . nth 0 . _String . unpacked . decimal
   let monthField = value ^? key "fields" . key "month" . nth 0 . _String . unpacked . decimal
   let dayField = value ^? key "fields" . key "day" . nth 0 . _String . unpacked . decimal
   let sTitle = value ^? key "fields" . key "title" . nth 0 . _String
   let fTitle = value ^? key "fields" . key "feedtitle" . nth 0 . _String
-  return $ PodcastShow yearField monthField dayField (fmap filterNewlines fTitle) (fmap filterNewlines sTitle) pFile
+  return $ PodcastShow yearField monthField dayField (fmap filterNewlines fTitle) (fmap filterNewlines sTitle) pFile symlinkPathField
 
-parseValue :: Text -> IO PodcastShow
-parseValue text = either fail return $ do
+parseValue :: Text -> Text -> IO PodcastShow
+parseValue text symlinkPathField = either fail return $ do
   value <- eitherDecodeStrict $ encodeUtf8 text
-  parsePodcastShow value
+  parsePodcastShow value symlinkPathField
 
 getAnnexMetadata :: Text -> IO Text
 getAnnexMetadata path = do
-  processOutput <- readCreateProcess ((proc "git-annex" ["metadata", "--json", unpack path]) { cwd = Just "/home/sean/Podcasts" }) ""
+  processOutput <- readCreateProcess ((proc "git-annex" ["metadata", "--json", unpack path]) { cwd = Just $ toFilePath podcastsDir }) ""
   return $ pack processOutput
 
-runGitAnnex :: QSem -> Text -> IO PodcastShow
-runGitAnnex semaphore path = bracket_ (waitQSem semaphore) (signalQSem semaphore) $ do
+runGitAnnex :: QSem -> Text -> Text -> IO PodcastShow
+runGitAnnex semaphore path symlink = bracket_ (waitQSem semaphore) (signalQSem semaphore) $ do
   metadataLine <- getAnnexMetadata path
-  result <- parseValue metadataLine
+  result <- parseValue metadataLine symlink
   return result
 
 uniqueFeedTitles :: [PodcastShow] -> [Text]
 uniqueFeedTitles = nub . toListOf (traverse . feedTitleLens . _Just)
 
 podcastsFolderWorkingDirectory :: CreateProcess -> CreateProcess
-podcastsFolderWorkingDirectory cp = cp { cwd = Just "/home/sean/Podcasts" }
+podcastsFolderWorkingDirectory cp = cp { cwd = Just $ toFilePath podcastsDir }
 
 runThisProcess :: (CreateProcess -> CreateProcess) -> (Maybe Handle -> ExitCode -> IO a) -> String -> [String] -> String -> IO a
 runThisProcess processTransform readOutput app params input = do
@@ -164,68 +165,60 @@ playPodcast podcastFile = do
 
 getSymlinks :: IO [(Text, Text)]
 getSymlinks = do
-  let podcastsDir = [absdir|/home/sean/Podcasts|]
   (podcastDirs, _) <- listDir podcastsDir
   podcastFiles <- foldMap (fmap snd . listDir) podcastDirs
   podcastSymlinks <- filterM isSymlink podcastFiles
   pathPairs <- traverse (\p -> fmap (\r -> (p, r)) $ canonicalizePath p) podcastSymlinks
   return $ fmap (\(p, r) -> (pack $ toFilePath p, pack $ toFilePath r)) pathPairs
 
-getConnection :: IO Connection
-getConnection = do
-  let cacheFolder = [absdir|/home/sean/.cache/podcast-chooser|]
-  -- Create cache folder.
-  createDirIfMissing True cacheFolder
-  -- Touch the file if it doesn't exist.
-  let cacheDBFile = cacheFolder </> [relfile|cache.db|]
-  -- Open database connection.
-  connection <- open (toFilePath cacheDBFile)
-  -- Create SHOWS table.
-  execute_ connection "CREATE TABLE IF NOT EXISTS shows (filepath TEXT PRIMARY KEY NOT NULL, year INT NULL, month INT NULL, day INT NULL, feedtitle TEXT NULL, showtitle TEXT NULL, showfile TEXT)"
-  return connection
+removeAll :: IO ()
+removeAll = do
+  exists <- doesFileExist cacheDBFile
+  when exists $ removeFile cacheDBFile
 
-getDatabaseShows :: Connection -> IO [PodcastShowDBEntry]
-getDatabaseShows connection = query_ connection "SELECT * FROM shows"
-
-findToRemoveToAdd :: [(Text, Text)] -> [PodcastShowDBEntry] -> ([PodcastShowDBEntry], [(Text, Text)])
+findToRemoveToAdd :: [(Text, Text)] -> [PodcastShow] -> ([PodcastShow], [(Text, Text)])
 findToRemoveToAdd symlinkPairs podcastEntries =
   let resolvedSymlinkPaths = fmap snd symlinkPairs
-      entryPaths = fmap (\(PodcastShowDBEntry (r, _)) -> r) podcastEntries
-      toRemove = filter (\(PodcastShowDBEntry (r, _)) -> notElem r resolvedSymlinkPaths) podcastEntries
+      toRemove = filter (\r -> notElem (symlinkPath r) resolvedSymlinkPaths) podcastEntries
+      entryPaths = fmap symlinkPath podcastEntries
       toAdd = filter (\(_, r) -> notElem r entryPaths) symlinkPairs
   in  (toRemove, toAdd)
 
-removeMissing :: Connection -> [PodcastShowDBEntry] -> IO ()
-removeMissing connection toRemove = do
-  traverse_ (\(PodcastShowDBEntry (r, _)) -> execute connection "DELETE FROM shows WHERE filepath = ?" (Only r)) toRemove
-
-removeAll :: Connection -> IO ()
-removeAll connection = execute_ connection "DELETE FROM shows"
-
-addNew :: Connection -> [(Text, Text)] -> IO ()
-addNew connection toAdd = do
+getNew :: [(Text, Text)] -> IO [PodcastShow]
+getNew toAdd = do
   -- Retrieve metadata.
   semaphore <- newQSem 20
-  newMetadata <- mapConcurrently (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex semaphore p) toAdd
-  --newMetadata <- traverse (\(p, r) -> fmap (\m -> (PodcastShowDBEntry (r, m))) $ runGitAnnex p) toAdd
-  -- Add new metadata.
-  traverse_ (\e -> execute connection "INSERT INTO shows VALUES (?, ?, ?, ?, ?, ?, ?)" e) newMetadata
+  mapConcurrently (\(p, r) -> runGitAnnex semaphore p r) toAdd
 
-chooseAndPlay :: Bool -> Connection -> IO Bool
-chooseAndPlay clean connection = do
-  -- Maybe clean the database away.
-  when clean $ removeAll connection
+getCachedShows :: IO [PodcastShow]
+getCachedShows = do
+  exists <- doesFileExist cacheDBFile
+  case exists of
+    False   -> return []
+    True    -> do
+      cacheFileContents <- BL.readFile $ toFilePath cacheDBFile
+      let decodeResult = eitherDecode' cacheFileContents
+      either fail return decodeResult
+
+writeCache :: [PodcastShow] -> IO ()
+writeCache shows = do
+  createDirIfMissing True cacheFolder
+  let encoded = encode shows
+  BL.writeFile (toFilePath cacheDBFile) encoded 
+
+chooseAndPlay :: Bool -> IO Bool
+chooseAndPlay clean = do
+  -- Maybe clean the cache away.
+  when clean $ removeAll
   -- Get list of symlinks and real paths in Podcasts directory.
   symlinkPairs <- getSymlinks
   -- Get files in cache database.
-  databaseShows <- getDatabaseShows connection
-  let (toRemove, toAdd) = findToRemoveToAdd symlinkPairs databaseShows
-  -- Remove entries not present in database.
-  removeMissing connection toRemove
-  -- For new entries.
-  addNew connection toAdd
-  -- Show menu.
-  podcastShows <- (fmap . fmap) (\(PodcastShowDBEntry (_, e)) -> e) $ getDatabaseShows connection
+  cachedShows <- getCachedShows
+  let (toRemove, toAdd) = findToRemoveToAdd symlinkPairs cachedShows
+  newShows <- getNew toAdd
+  -- Handle the changes.
+  let podcastShows = (cachedShows \\ toRemove) ++ newShows
+  writeCache podcastShows
   podcastChosen <- choosePodcast podcastShows
   let podcastFile = fmap showFile podcastChosen
   let noShowChosen = putStrLn "No Show Chosen." >> return False
@@ -236,6 +229,6 @@ main = do
   let parser = switch (long "clean" <> help "Clear out the database.")
   let opts = info parser mempty
   execParser opts >>= \clean -> do
-    let toLoop = bracket getConnection close $ chooseAndPlay clean
+    let toLoop = chooseAndPlay clean
     void $ iterateWhile id toLoop
 
