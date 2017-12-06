@@ -1,6 +1,6 @@
 { mkDerivation, aeson, async, base, bytestring, extra, foldl, lens
 , lens-aeson, monad-loops, optparse-applicative, path, path-io
-, process, sqlite-simple, stdenv, text, time, transformers
+, process, stdenv, text, time, transformers
 , nixpkgs ? import <nixpkgs> {}
 }:
 let
@@ -15,7 +15,7 @@ in
     isExecutable = true;
     executableHaskellDepends = [
       aeson async base bytestring extra foldl lens lens-aeson monad-loops
-      optparse-applicative path path-io process sqlite-simple text time
+      optparse-applicative path path-io process text time
       transformers
     ];
     homepage = "https://github.com/githubuser/podcast-chooser#readme";
