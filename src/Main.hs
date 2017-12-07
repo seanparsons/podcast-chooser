@@ -40,7 +40,7 @@ import GHC.IO.Handle
 import System.Process
 import System.Exit
 import System.Console.Byline
-
+import Podcasts
 
 chooseFeedMenu :: [PodcastShow] -> Menu Text
 chooseFeedMenu shows = banner (text "Choose Feed") $ menu (uniqueFeedTitles shows) text
@@ -82,22 +82,22 @@ runProcessNoPipes =
   in  runThisProcess processTransform
 
 choiceToMaybe :: Choice a -> Maybe a
-choiceToMaybe (Match a)   = Just a	
+choiceToMaybe (Match a)   = Just a
 choiceToMaybe _           = Nothing
 
-askOptionally :: [a] -> (a -> Stylized) -> Stylized -> Stylized -> Byline IO (Maybe a)
-askOptionally menuChoices prompt errorMessage =
-  let menuFromChoices = 
-  in  fmap choiceToMaybe $ askWithMenuRepeatedly menuChoice prompt errorMessage
+askOptionally :: [a] -> (a -> Stylized) -> Stylized -> Stylized -> MaybeT (Byline IO) a
+askOptionally menuChoices styling prompt errorMessage =
+  let menuFromChoices = menu menuChoices styling
+  in  MaybeT $ fmap choiceToMaybe $ askWithMenuRepeatedly menuFromChoices prompt errorMessage
+
+stylizeShow :: PodcastShow -> Stylized
+stylizeShow podcastShow = text $ showTitle podcastShow
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
-choosePodcast podcastShows = runByline $ do
-  feedChoice <- 
-  let feedShows = sortOn (\p -> (year p, month p, day p, showTitle p)) $ filter (\s -> feedTitle s == Just feedChoice) podcastShows
-  let showTitles = feedShows >>= (maybeToList . showTitle)
-  showChoice <- getChoice "Choose Show" showTitles
-  podcastShow <- MaybeT $ return $ find (\s -> feedTitle s == Just feedChoice && showTitle s == Just showChoice) podcastShows
-  return podcastShow
+choosePodcast podcastShows = fmap join $ runByline $ runMaybeT $ do
+  feedChoice <- askOptionally (uniqueFeedTitles podcastShows) text "Choose Feed" "You Need To Choose A Feed"
+  let feedShows = sort $ filter (\s -> feedTitle s == feedChoice) podcastShows
+  askOptionally feedShows stylizeShow "Choose Show" "You Need To Choose A Show"
 
 playPodcast :: Text -> IO Bool
 playPodcast podcastFile = do
@@ -105,8 +105,8 @@ playPodcast podcastFile = do
   runProcessNoPipes ignoreTextOutput "vlc" ["-I", "ncurses", "--no-loop", "--no-repeat", "--play-and-exit", unpack podcastFile] ""
   return True
 
-chooseAndPlay :: Bool -> IO Bool
-chooseAndPlay clean = do
+setup :: Bool -> IO [PodcastShow]
+setup clean = do
   -- Maybe clean the cache away.
   when clean $ removeAll
   -- Get list of symlinks and real paths in Podcasts directory.
@@ -118,6 +118,10 @@ chooseAndPlay clean = do
   -- Handle the changes.
   let podcastShows = (cachedShows \\ toRemove) ++ newShows
   writeCache podcastShows
+  return podcastShows
+
+chooseAndPlay :: [PodcastShow] -> IO Bool
+chooseAndPlay podcastShows = do
   podcastChosen <- choosePodcast podcastShows
   let podcastFile = fmap showFile podcastChosen
   let noShowChosen = putStrLn "No Show Chosen." >> return False
@@ -128,6 +132,7 @@ main = do
   let parser = switch (long "clean" <> help "Clear out the database.")
   let opts = info parser mempty
   execParser opts >>= \clean -> do
-    let toLoop = chooseAndPlay clean
+    podcastShows <- setup clean
+    let toLoop = chooseAndPlay podcastShows
     void $ iterateWhile id toLoop
 

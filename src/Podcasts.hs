@@ -36,6 +36,7 @@ import Options.Applicative
 import Control.Concurrent.Async
 import Control.Concurrent.QSem
 import GHC.Generics
+import System.Process
 
 cacheFolder :: Path Abs Dir
 cacheFolder = [absdir|/home/sean/.cache/podcast-chooser|]
@@ -50,8 +51,8 @@ data PodcastShow = PodcastShow
                   { year         :: Maybe Int
                   , month        :: Maybe Int
                   , day          :: Maybe Int
-                  , feedTitle    :: Maybe Text
-                  , showTitle    :: Maybe Text
+                  , feedTitle    :: Text
+                  , showTitle    :: Text
                   , showFile     :: Text
                   , symlinkPath  :: Text
                   } deriving (Eq, Ord, Show, Generic)
@@ -61,7 +62,7 @@ instance ToJSON PodcastShow where
 
 instance FromJSON PodcastShow
 
-feedTitleLens :: Lens' PodcastShow (Maybe Text)
+feedTitleLens :: Lens' PodcastShow Text
 feedTitleLens = lens feedTitle (\s -> \a -> s {feedTitle = a})
 
 filterNewlines :: Text -> Text
@@ -73,9 +74,9 @@ parsePodcastShow value symlinkPathField = maybe (Left ("Can't parse podcast: " +
   let yearField = value ^? key "fields" . key "year" . nth 0 . _String . unpacked . decimal
   let monthField = value ^? key "fields" . key "month" . nth 0 . _String . unpacked . decimal
   let dayField = value ^? key "fields" . key "day" . nth 0 . _String . unpacked . decimal
-  let sTitle = value ^? key "fields" . key "title" . nth 0 . _String
-  let fTitle = value ^? key "fields" . key "feedtitle" . nth 0 . _String
-  return $ PodcastShow yearField monthField dayField (fmap filterNewlines fTitle) (fmap filterNewlines sTitle) pFile symlinkPathField
+  sTitle <- value ^? key "fields" . key "title" . nth 0 . _String
+  fTitle <- value ^? key "fields" . key "feedtitle" . nth 0 . _String
+  return $ PodcastShow yearField monthField dayField (filterNewlines fTitle) (filterNewlines sTitle) pFile symlinkPathField
 
 
 parseValue :: Text -> Text -> IO PodcastShow
@@ -138,4 +139,4 @@ runGitAnnex semaphore path symlink = bracket_ (waitQSem semaphore) (signalQSem s
   return result
 
 uniqueFeedTitles :: [PodcastShow] -> [Text]
-uniqueFeedTitles = nub . toListOf (traverse . feedTitleLens . _Just)
+uniqueFeedTitles = nub . toListOf (traverse . feedTitleLens)
