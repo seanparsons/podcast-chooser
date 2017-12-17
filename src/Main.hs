@@ -40,6 +40,7 @@ import GHC.IO.Handle
 import System.Process
 import System.Exit
 import System.Console.Byline
+import Text.Printf
 import Podcasts
 
 chooseFeedMenu :: [PodcastShow] -> Menu Text
@@ -91,11 +92,15 @@ askOptionally menuChoices styling prompt errorMessage =
   in  MaybeT $ fmap choiceToMaybe $ askWithMenuRepeatedly menuFromChoices prompt errorMessage
 
 stylizeShow :: PodcastShow -> Stylized
-stylizeShow podcastShow = text $ showTitle podcastShow
+stylizeShow podcastShow =
+  let baseTitle = showTitle podcastShow
+      dmy = getDayMonthYear podcastShow
+      withHyphen = fold $ fmap (\(d, m, y) -> printf "%02v/%02v/%04v - " d m y) dmy
+  in  text $ (pack withHyphen `mappend` baseTitle)
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
 choosePodcast podcastShows = fmap join $ runByline $ runMaybeT $ do
-  feedChoice <- askOptionally (uniqueFeedTitles podcastShows) text "Choose Feed" "You Need To Choose A Feed"
+  feedChoice <- askOptionally (sort $ uniqueFeedTitles podcastShows) text "Choose Feed" "You Need To Choose A Feed"
   let feedShows = sort $ filter (\s -> feedTitle s == feedChoice) podcastShows
   askOptionally feedShows stylizeShow "Choose Show" "You Need To Choose A Show"
 

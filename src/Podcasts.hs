@@ -3,6 +3,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Podcasts where
 
@@ -61,6 +62,9 @@ instance ToJSON PodcastShow where
   toEncoding = genericToEncoding defaultOptions
 
 instance FromJSON PodcastShow
+
+getDayMonthYear :: PodcastShow -> Maybe (Int, Int, Int)
+getDayMonthYear PodcastShow{..} = (,,) <$> day <*> month <*> year
 
 feedTitleLens :: Lens' PodcastShow Text
 feedTitleLens = lens feedTitle (\s -> \a -> s {feedTitle = a})
