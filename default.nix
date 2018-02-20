@@ -1,2 +1,6 @@
-{ nixpkgs ? import <nixpkgs> {}, compiler ? "ghc802" }:
-nixpkgs.pkgs.haskell.packages.${compiler}.callPackage ./podcast-chooser.nix { }
+let
+  default = { nixpkgs ? import <nixpkgs> {} }:
+    (import ./tinc.nix { inherit nixpkgs; }).resolver.callPackage ./package.nix {};
+  overrideFile = ./default-override.nix;
+  expr = if builtins.pathExists overrideFile then import overrideFile else default;
+in expr
