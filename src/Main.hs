@@ -6,45 +6,42 @@
 
 module Main where
 
+import Control.Concurrent.Async
+import Control.Concurrent.QSem
+import Control.Exception
+import Control.Lens hiding (Choice)
 import Control.Monad
+import Control.Monad.Extra
+import Control.Monad.IO.Class
+import Control.Monad.Loops
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Maybe
 import Data.Aeson
+import Data.Aeson.Lens
 import Data.ByteString.Lazy (fromStrict)
-import qualified Data.ByteString.Lazy as BL
 import Data.Char
 import Data.Foldable
+import Data.List
 import Data.Maybe
 import Data.Monoid
 import Data.Text hiding (lines, find, filter)
-import qualified Data.Text as T
 import Data.Text.Encoding
 import Data.Text.Lens hiding (text)
-import Data.Aeson.Lens
-import Control.Lens hiding (Choice)
-import Numeric.Lens
-import Data.List
 import Data.Time.Clock
 import Data.Time.Format
-import Path
-import Path.IO
-import Control.Monad.Extra
-import Control.Exception
-import Control.Monad.Loops
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Maybe
-import Options.Applicative
-import Control.Concurrent.Async
-import Control.Concurrent.QSem
 import GHC.Generics
 import GHC.IO.Handle
-import System.Process
-import System.Exit
-import System.Console.Byline
-import Text.Printf
+import Graphics.Vty.Menu
+import Numeric.Lens
+import Options.Applicative
+import Path
+import Path.IO
 import Podcasts
-
-chooseFeedMenu :: [PodcastShow] -> Menu Text
-chooseFeedMenu shows = banner (text "Choose Feed") $ menu (uniqueFeedTitles shows) text
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Text as T
+import System.Exit
+import System.Process
+import Text.Printf
 
 podcastsFolderWorkingDirectory :: CreateProcess -> CreateProcess
 podcastsFolderWorkingDirectory cp = cp { cwd = Just $ toFilePath podcastsDir }
@@ -82,27 +79,27 @@ runProcessNoPipes =
                                  }
   in  runThisProcess processTransform
 
-choiceToMaybe :: Choice a -> Maybe a
-choiceToMaybe (Match a)   = Just a
-choiceToMaybe _           = Nothing
+askOptionally :: (a -> String) -> [a] -> MaybeT IO a
+askOptionally asString menuChoices = MaybeT $ displayMenuOfValues $ fmap (\a -> (asString a, a)) menuChoices
 
-askOptionally :: [a] -> (a -> Stylized) -> Stylized -> Stylized -> MaybeT (Byline IO) a
-askOptionally menuChoices styling prompt errorMessage =
-  let menuFromChoices = menu menuChoices styling
-  in  MaybeT $ fmap choiceToMaybe $ askWithMenuRepeatedly menuFromChoices prompt errorMessage
-
-stylizeShow :: PodcastShow -> Stylized
+stylizeShow :: PodcastShow -> String
 stylizeShow podcastShow =
   let baseTitle = showTitle podcastShow
       dmy = getDayMonthYear podcastShow
       withHyphen = fold $ fmap (\(d, m, y) -> printf "%02v/%02v/%04v - " d m y) dmy
-  in  text $ (pack withHyphen `mappend` baseTitle)
+  in  withHyphen `mappend` unpack baseTitle
+
+askFeedChoice :: [Text] -> MaybeT IO Text
+askFeedChoice = askOptionally unpack
+
+askShowChoice :: [PodcastShow] -> MaybeT IO PodcastShow
+askShowChoice = askOptionally stylizeShow
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
-choosePodcast podcastShows = fmap join $ runByline $ runMaybeT $ do
-  feedChoice <- askOptionally (sort $ uniqueFeedTitles podcastShows) text "Choose Feed" "You Need To Choose A Feed"
+choosePodcast podcastShows = runMaybeT $ do
+  feedChoice <- askFeedChoice (sort $ uniqueFeedTitles podcastShows)
   let feedShows = sort $ filter (\s -> feedTitle s == feedChoice) podcastShows
-  askOptionally feedShows stylizeShow "Choose Show" "You Need To Choose A Show"
+  askShowChoice feedShows
 
 playPodcast :: Text -> IO Bool
 playPodcast podcastFile = do

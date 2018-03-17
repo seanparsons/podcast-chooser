@@ -1,6 +1,6 @@
-{ mkDerivation, aeson, async, base, byline, bytestring, extra
-, foldl, lens, lens-aeson, monad-loops, optparse-applicative, path
-, path-io, process, stdenv, text, time, transformers
+{ mkDerivation, aeson, async, base, bytestring, extra, foldl, lens
+, lens-aeson, monad-loops, optparse-applicative, path, path-io
+, process, stdenv, text, time, transformers, vty-menu
 }:
 mkDerivation {
   pname = "podcast-chooser";
@@ -9,9 +9,9 @@ mkDerivation {
   isLibrary = false;
   isExecutable = true;
   executableHaskellDepends = [
-    aeson async base byline bytestring extra foldl lens lens-aeson
-    monad-loops optparse-applicative path path-io process text time
-    transformers
+    aeson async base bytestring extra foldl lens lens-aeson monad-loops
+    optparse-applicative path path-io process text time transformers
+    vty-menu
   ];
   homepage = "https://github.com/githubuser/podcast-chooser#readme";
   license = stdenv.lib.licenses.bsd3;
