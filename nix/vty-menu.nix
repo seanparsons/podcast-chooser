@@ -3,9 +3,9 @@ mkDerivation {
   pname = "vty-menu";
   version = "0.0.4";
   src = fetchgit {
-    url = "git://github.com/timthelion/vty-menu.git";
-    sha256 = "1y0d7lvqji6fakbm6xvcb4ig81qzvk1vbryah1qb3kjsxg0irjkb";
-    rev = "3a7bad0b288f33fe2be7595f592c8602ddcad4b8";
+    url = "git://github.com/seanparsons/vty-menu.git";
+    sha256 = "1y48xb71sywwhvqzbr3llkfvix84n1x9d7sy6nkzv0lsm4pfz1xb";
+    rev = "49760977c5e32867cf45736e2141329f68238286";
   };
   isLibrary = true;
   isExecutable = true;
