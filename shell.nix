@@ -6,6 +6,5 @@ in release.pkgs.stdenv.lib.overrideDerivation release.podcast-chooser.env (oldAt
   nativeBuildInputs = (oldAttrs.nativeBuildInputs or []) ++ [
     release.cabal
     release.pkgs.haskellPackages.cabal2nix
-    release.pkgs.haskellPackages.steeloverseer
   ];
 })
