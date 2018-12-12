@@ -31,7 +31,7 @@ import Data.Time.Clock
 import Data.Time.Format
 import GHC.Generics
 import GHC.IO.Handle
-import System.Console.Byline
+import System.Console.Haskeline
 import Numeric.Lens
 import Options.Applicative
 import Path
@@ -42,6 +42,7 @@ import qualified Data.Text as T
 import System.Exit
 import System.Process
 import Text.Printf
+import Debug.Trace
 
 chooseFeedMenu :: [PodcastShow] -> Menu Text
 chooseFeedMenu shows = banner (text "Choose Feed") $ menu (uniqueFeedTitles shows) text
@@ -50,8 +51,13 @@ choiceToMaybe :: Choice a -> Maybe a
 choiceToMaybe (Match a)   = Just a
 choiceToMaybe _           = Nothing
 
-askOptionally :: [a] -> (a -> Stylized) -> Stylized -> Stylized -> MaybeT (Byline IO) a
-askOptionally menuChoices styling prompt errorMessage =
+matchAnywhere :: [a] -> (a -> Text) -> Text -> [a]
+matchAnywhere items asText text =
+  let prefixCheck i = (T.toLower text) `T.isInfixOf` (T.toLower $ asText i)
+  in  filter prefixCheck items
+
+askOptionally :: [a] -> (a -> Text) -> (a -> Stylized) -> Stylized -> Stylized -> MaybeT (Byline IO) a
+askOptionally menuChoices asText styling prompt errorMessage =
   let menuFromChoices = menu menuChoices styling
   in  MaybeT $ fmap choiceToMaybe $ askWithMenuRepeatedly menuFromChoices prompt errorMessage
 
@@ -91,18 +97,21 @@ runProcessNoPipes =
                                  }
   in  runThisProcess processTransform
 
-stylizeShow :: PodcastShow -> Stylized
-stylizeShow podcastShow =
+textOfShow :: PodcastShow -> Text
+textOfShow podcastShow =
   let baseTitle = showTitle podcastShow
       dmy = getDayMonthYear podcastShow
       withHyphen = fold $ fmap (\(d, m, y) -> printf "%02v/%02v/%04v - " d m y) dmy
-  in  text $ (pack withHyphen `mappend` baseTitle)
+  in  pack withHyphen `mappend` baseTitle
+
+stylizeShow :: PodcastShow -> Stylized
+stylizeShow podcastShow = text $ textOfShow podcastShow
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
 choosePodcast podcastShows = fmap join $ runByline $ runMaybeT $ do
-  feedChoice <- askOptionally (sort $ uniqueFeedTitles podcastShows) text "Choose Feed" "You Need To Choose A Feed"
+  feedChoice <- askOptionally (sort $ uniqueFeedTitles podcastShows) id text "Choose Feed" "You Need To Choose A Feed"
   let feedShows = sort $ filter (\s -> feedTitle s == feedChoice) podcastShows
-  askOptionally feedShows stylizeShow "Choose Show" "You Need To Choose A Show"
+  askOptionally feedShows textOfShow stylizeShow "Choose Show" "You Need To Choose A Show"
 
 playPodcast :: Text -> IO Bool
 playPodcast podcastFile = do
