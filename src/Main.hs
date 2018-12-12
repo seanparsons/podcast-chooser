@@ -31,7 +31,7 @@ import Data.Time.Clock
 import Data.Time.Format
 import GHC.Generics
 import GHC.IO.Handle
-import Graphics.Vty.Menu
+import System.Console.Byline
 import Numeric.Lens
 import Options.Applicative
 import Path
@@ -42,6 +42,18 @@ import qualified Data.Text as T
 import System.Exit
 import System.Process
 import Text.Printf
+
+chooseFeedMenu :: [PodcastShow] -> Menu Text
+chooseFeedMenu shows = banner (text "Choose Feed") $ menu (uniqueFeedTitles shows) text
+
+choiceToMaybe :: Choice a -> Maybe a
+choiceToMaybe (Match a)   = Just a
+choiceToMaybe _           = Nothing
+
+askOptionally :: [a] -> (a -> Stylized) -> Stylized -> Stylized -> MaybeT (Byline IO) a
+askOptionally menuChoices styling prompt errorMessage =
+  let menuFromChoices = menu menuChoices styling
+  in  MaybeT $ fmap choiceToMaybe $ askWithMenuRepeatedly menuFromChoices prompt errorMessage
 
 podcastsFolderWorkingDirectory :: CreateProcess -> CreateProcess
 podcastsFolderWorkingDirectory cp = cp { cwd = Just $ toFilePath podcastsDir }
@@ -79,27 +91,18 @@ runProcessNoPipes =
                                  }
   in  runThisProcess processTransform
 
-askOptionally :: (a -> String) -> [a] -> MaybeT IO a
-askOptionally asString menuChoices = MaybeT $ displayMenuOfValues $ fmap (\a -> (asString a, a)) menuChoices
-
-stylizeShow :: PodcastShow -> String
+stylizeShow :: PodcastShow -> Stylized
 stylizeShow podcastShow =
   let baseTitle = showTitle podcastShow
       dmy = getDayMonthYear podcastShow
       withHyphen = fold $ fmap (\(d, m, y) -> printf "%02v/%02v/%04v - " d m y) dmy
-  in  withHyphen `mappend` unpack baseTitle
-
-askFeedChoice :: [Text] -> MaybeT IO Text
-askFeedChoice = askOptionally unpack
-
-askShowChoice :: [PodcastShow] -> MaybeT IO PodcastShow
-askShowChoice = askOptionally stylizeShow
+  in  text $ (pack withHyphen `mappend` baseTitle)
 
 choosePodcast :: [PodcastShow] -> IO (Maybe PodcastShow)
-choosePodcast podcastShows = runMaybeT $ do
-  feedChoice <- askFeedChoice (sort $ uniqueFeedTitles podcastShows)
+choosePodcast podcastShows = fmap join $ runByline $ runMaybeT $ do
+  feedChoice <- askOptionally (sort $ uniqueFeedTitles podcastShows) text "Choose Feed" "You Need To Choose A Feed"
   let feedShows = sort $ filter (\s -> feedTitle s == feedChoice) podcastShows
-  askShowChoice feedShows
+  askOptionally feedShows stylizeShow "Choose Show" "You Need To Choose A Show"
 
 playPodcast :: Text -> IO Bool
 playPodcast podcastFile = do
