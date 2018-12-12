@@ -31,7 +31,7 @@ import Data.Time.Clock
 import Data.Time.Format
 import GHC.Generics
 import GHC.IO.Handle
-import System.Console.Haskeline
+import System.Console.Byline
 import Numeric.Lens
 import Options.Applicative
 import Path
