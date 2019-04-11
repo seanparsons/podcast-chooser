@@ -1,4 +1,4 @@
-{ compiler ? "ghc802" }:
+{ compiler ? "ghc864" }:
 
 let
   # Disable tests for these packages
