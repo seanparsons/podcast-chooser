@@ -116,7 +116,7 @@ choosePodcast podcastShows = fmap join $ runByline $ runMaybeT $ do
 playPodcast :: Text -> IO Bool
 playPodcast podcastFile = do
   runProcessCreatingPipes ignoreTextOutput "git-annex" ["get", unpack podcastFile] ""
-  runProcessNoPipes ignoreTextOutput "vlc" ["-I", "ncurses", "--no-loop", "--no-repeat", "--play-and-exit", unpack podcastFile] ""
+  runProcessNoPipes ignoreTextOutput "mpv" [unpack podcastFile] ""
   return True
 
 setup :: Bool -> IO [PodcastShow]
